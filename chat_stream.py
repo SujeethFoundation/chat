@@ -273,10 +273,35 @@ async def handle(req):
     return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
 
+async def adapt(handler, req):
+    """Run a route written for func.HttpRequest / func.HttpResponse (chat_blueprint.py) under the FastAPI types.
+    Azure Functions does not allow plain and FastAPI HTTP routes in the same app: with streaming on, every route has
+    to use the FastAPI types, or the app lists no functions. Keeping the original handlers makes this a thin layer."""
+    hreq = func.HttpRequest(method=req.method, url=str(req.url), headers=dict(req.headers),
+                            params=dict(req.query_params), body=await req.body())
+    resp = await handler(hreq)
+    headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-type", "content-length")}
+    return Response(content=resp.get_body(), status_code=resp.status_code, headers=headers, media_type=resp.mimetype)
+
+
 def register(app):
-    """Add the streaming route to the Function App."""
+    """Add every chat route to the Function App, all with the FastAPI types."""
     from azurefunctions.extensions.http.fastapi import Request
 
-    @app.route(route="chat/stream", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.ANONYMOUS)
+    anonymous = func.AuthLevel.ANONYMOUS
+
+    @app.route(route="chat/health", methods=["GET"], auth_level=anonymous)
+    async def chat_health(req: Request) -> Response:
+        return await adapt(cb.chat_health._function._func, req)
+
+    @app.route(route="chat", methods=["POST", "OPTIONS"], auth_level=anonymous)
+    async def chat(req: Request) -> Response:
+        return await adapt(cb.chat._function._func, req)
+
+    @app.route(route="chat/fold", methods=["POST", "OPTIONS"], auth_level=anonymous)
+    async def chat_fold(req: Request) -> Response:
+        return await adapt(cb.chat_fold._function._func, req)
+
+    @app.route(route="chat/stream", methods=["POST", "OPTIONS"], auth_level=anonymous)
     async def chat_stream(req: Request) -> StreamingResponse:
         return await handle(req)
