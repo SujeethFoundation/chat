@@ -166,6 +166,12 @@ def test_a_long_conversation_tells_the_page_to_fold(monkeypatch):
 def test_the_slot_is_free_again_after_a_stream(monkeypatch):
     use(monkeypatch, FakeClient([completed("Ok.")]))
     stream_events()
+    # The slot is released by a callback just after the last event, so give it a moment instead of checking at once.
+    import time
+    for _ in range(100):
+        if cb._in_flight == 0:
+            break
+        time.sleep(0.01)
     assert cb._in_flight == 0
 
 
