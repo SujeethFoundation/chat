@@ -585,22 +585,32 @@ async def read_files(request_id, messages):
         return None, FRIENDLY["file"]
 
 
-def read_payload(req, origin):
-    """Origin, size and JSON checks shared by the POST routes. Returns (payload, None) or (None, error response)."""
+def check_payload(origin, body):
+    """Origin, size and JSON checks shared by the POST routes. Returns (payload, None) or
+    (None, (status, body_dict, send_origin)), where send_origin says whether the error should carry the CORS headers."""
     if not origin or origin.rstrip("/").lower() not in ALLOWED_ORIGINS:
-        return None, reply_json(403, {"error": "This address cannot use the chat."})
+        return None, (403, {"error": "This address cannot use the chat."}, False)
     if not BASE_URL:
         log.error("chat failed: FOUNDRY_AGENT_BASE_URL is not set")
-        return None, reply_json(503, {"error": FRIENDLY["unavailable"]}, origin)
-    body = req.get_body() or b""
+        return None, (503, {"error": FRIENDLY["unavailable"]}, True)
+    body = body or b""
     if len(body) > MAX_BODY_BYTES:
-        return None, reply_json(413, {"error": "That request is too large. Attach files of "
-                                               f"{attachments.MAX_FILE_BYTES // (1024 * 1024)} MB or less."}, origin)
+        return None, (413, {"error": "That request is too large. Attach files of "
+                                     f"{attachments.MAX_FILE_BYTES // (1024 * 1024)} MB or less."}, True)
     try:
         payload = json.loads(body.decode("utf-8"))  # the page sends text/plain, which skips the browser's preflight
     except (ValueError, UnicodeDecodeError):
-        return None, reply_json(400, {"error": "Send JSON."}, origin)
+        return None, (400, {"error": "Send JSON."}, True)
     return (payload if isinstance(payload, dict) else {}), None
+
+
+def read_payload(req, origin):
+    """The same checks for the routes that answer with func.HttpResponse. Returns (payload, None) or (None, error response)."""
+    payload, error = check_payload(origin, req.get_body())
+    if error:
+        status, body, send_origin = error
+        return None, reply_json(status, body, origin if send_origin else None)
+    return payload, None
 
 
 # These routes are open to the web (the rest of this app needs a function key).
