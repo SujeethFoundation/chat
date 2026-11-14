@@ -15,6 +15,7 @@ It does not call the ontology, websearch, or wikisearch apps directly. The agent
 ## Routes
 
 - `POST /api/chat`: `{"messages": [{"role", "content", "attachments"}], "summary": "..."}` returns `{"reply": "..."}`. When a conversation gets long, the reply also carries `{"fold": {"keep_last": N}}`.
+- `POST /api/chat/stream`: the same request as `/api/chat`, answered as a stream of server-sent events, so the reply appears as it is written. See the top of `chat_stream.py` for the events (`status`, `delta`, `reset`, `done`, `error`). Problems found before the stream begins (bad origin, bad JSON, rate limit, no free slot) are ordinary JSON responses with the usual status codes.
 - `POST /api/chat/fold`: summarizes older turns so a long conversation keeps working.
 - `GET /api/chat/health`: returns whether chat is configured. With `?warm=1` it loads the model client in the background, so the first message is faster.
 
@@ -29,6 +30,18 @@ Visitors can attach PDF, Word, PowerPoint, Excel, text, Markdown, and CSV files.
 Required: `FOUNDRY_AGENT_BASE_URL`.
 Common: `CHAT_ALLOWED_ORIGINS`, `CHAT_MAX_MESSAGE_CHARS`, `CHAT_MAX_CONCURRENT`, `CHAT_RATE_PER_MINUTE`, `CHAT_RATE_PER_HOUR`, `CHAT_GLOBAL_PER_HOUR`, `CHAT_MAX_HISTORY_CHARS`, `CHAT_SUMMARIZE_AFTER_CHARS`, `CHAT_TIMEOUT_SECONDS`.
 The full list, with defaults, is at the top of `chat_blueprint.py`. Chat is always on in this app, so `CHAT_ENABLED` is not used.
+
+## Streaming
+
+`/api/chat/stream` uses the FastAPI request and response types, which Azure Functions needs in order to stream. This takes the app setting `PYTHON_ENABLE_INIT_INDEXING=1` and the `azurefunctions-extensions-http-fastapi` package (in `requirements.txt`). The other routes keep the standard types, and `/api/chat` is unchanged, so a page that has not been updated keeps working.
+
+To check that text really arrives in pieces (not all at the end), run this and watch the events appear one by one:
+
+    curl -N -H "Origin: https://www.sujeeth.org" -H "Content-Type: text/plain" \
+      -d '{"messages":[{"role":"user","content":"What is a Career Circle?"}]}' \
+      https://<chat-app-name>.azurewebsites.net/api/chat/stream
+
+The log line `chat <id> stream ok` reports `first_text` (seconds until the first piece of the answer) and `seconds` (the whole run). Compare the two to see what streaming saves.
 
 ## Hosting
 
