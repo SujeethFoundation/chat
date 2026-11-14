@@ -298,8 +298,7 @@ def get_client():
     with _client_lock:
         if _client is None:
             from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-            import httpx
-            from openai import DefaultHttpxClient, OpenAI
+            from openai import DEFAULT_CONNECTION_LIMITS, DefaultHttpxClient, OpenAI
 
             _token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://ai.azure.com/.default")
             kwargs = {
@@ -309,8 +308,9 @@ def get_client():
                 "max_retries": MODEL_RETRIES,
                 # The default connection pool drops idle connections after 5 seconds, so most chats pay for a new
                 # TLS handshake. Keeping them for 30 seconds lets a chat reuse the one the warm-up opened.
-                "http_client": DefaultHttpxClient(limits=httpx.Limits(max_connections=100, max_keepalive_connections=20,
-                                                                      keepalive_expiry=30)),
+                # httpx.Limits is built from the library's own default, so this file does not import httpx itself.
+                "http_client": DefaultHttpxClient(limits=type(DEFAULT_CONNECTION_LIMITS)(
+                    max_connections=100, max_keepalive_connections=20, keepalive_expiry=30)),
             }
             if API_VERSION:
                 kwargs["default_query"] = {"api-version": API_VERSION}
