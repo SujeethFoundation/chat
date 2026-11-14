@@ -303,3 +303,17 @@ def test_every_route_uses_the_fastapi_types():
     cs.register(app)
     names = sorted(f.get_function_name() for f in app.get_functions())
     assert names == ["chat", "chat_fold", "chat_health", "chat_stream"]
+
+
+def test_error_event_carries_the_cause_only_when_detail_logging_is_on(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("client broke")
+
+    monkeypatch.setattr(cs, "stream_agent", boom)
+    for flag in (False, True):
+        monkeypatch.setattr(cb, "LOG_ERROR_DETAIL", flag)
+        events = []
+        cs.work("rid", [{"role": "user", "content": "hi"}], "", events.append, __import__("threading").Event(), 0.0)
+        error = next(e for e in events if e and e["type"] == "error")
+        assert ("detail" in error) is flag
+        assert not flag or "RuntimeError: client broke" in error["detail"]

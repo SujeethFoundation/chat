@@ -46,7 +46,7 @@ Settings (application settings of the Function App):
                                  adds the CORS headers itself. Set this to false so the route does not add them a second time
                                  (a browser rejects a response whose Access-Control-Allow-Origin appears twice). The route still
                                  refuses any page that is not in CHAT_ALLOWED_ORIGINS.
-  CHAT_LOG_ERROR_DETAIL (false)  Set to true while diagnosing: failures also log the error's text (first 300 characters).
+  CHAT_LOG_ERROR_DETAIL (false)  Set to true while diagnosing: failures also log the error's text (first 300 characters), and the streaming route's error event carries it too (visible in the browser's Network tab).
                                  Off by default, because an error's text can echo part of what a visitor wrote.
 
 How it scales: Flex Consumption adds instances when an instance's requests in flight reach its per-instance HTTP
@@ -308,9 +308,9 @@ def get_client():
                 "timeout": TIMEOUT_SECONDS,
                 "max_retries": MODEL_RETRIES,
                 # The default connection pool drops idle connections after 5 seconds, so most chats pay for a new
-                # TLS handshake. Keeping them for two minutes lets a chat reuse the one the warm-up opened.
+                # TLS handshake. Keeping them for 30 seconds lets a chat reuse the one the warm-up opened.
                 "http_client": DefaultHttpxClient(limits=httpx.Limits(max_connections=100, max_keepalive_connections=20,
-                                                                      keepalive_expiry=120)),
+                                                                      keepalive_expiry=30)),
             }
             if API_VERSION:
                 kwargs["default_query"] = {"api-version": API_VERSION}
