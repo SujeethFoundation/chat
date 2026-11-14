@@ -298,7 +298,8 @@ def get_client():
     with _client_lock:
         if _client is None:
             from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-            from openai import OpenAI
+            import httpx
+            from openai import DefaultHttpxClient, OpenAI
 
             _token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://ai.azure.com/.default")
             kwargs = {
@@ -306,6 +307,10 @@ def get_client():
                 "api_key": _token_provider,
                 "timeout": TIMEOUT_SECONDS,
                 "max_retries": MODEL_RETRIES,
+                # The default connection pool drops idle connections after 5 seconds, so most chats pay for a new
+                # TLS handshake. Keeping them for two minutes lets a chat reuse the one the warm-up opened.
+                "http_client": DefaultHttpxClient(limits=httpx.Limits(max_connections=100, max_keepalive_connections=20,
+                                                                      keepalive_expiry=120)),
             }
             if API_VERSION:
                 kwargs["default_query"] = {"api-version": API_VERSION}
@@ -317,18 +322,28 @@ _warm_lock = threading.Lock()
 _warm_state = "cold"  # "cold" -> "running" -> "done"
 
 
+def open_connection(client, token):
+    """Make one throwaway request so the DNS lookup and TLS handshake are done and the connection sits in the pool.
+    The answer (probably a 404) does not matter."""
+    try:
+        client._client.request("GET", BASE_URL, headers={"Authorization": f"Bearer {token}"}, timeout=5)
+    except Exception as exc:  # best effort
+        log.info("chat warm-up connection failed (%s)", type(exc).__name__)
+
+
 def warm():
-    """Load the openai and azure-identity packages, build the client and fetch its first token, so the first real chat
-    does not pay for them. Safe to call many times; only the first call per instance does the work."""
+    """Load the openai and azure-identity packages, build the client, fetch its first token and open the first connection,
+    so the first real chat does not pay for them. Safe to call many times; only the first call per instance does the work."""
     global _warm_state
     with _warm_lock:
         if _warm_state != "cold":
             return
         _warm_state = "running"
     try:
-        get_client()
+        client = get_client()
         if _token_provider:
-            _token_provider()
+            token = _token_provider()
+            open_connection(client, token)
         if SUMMARY_BASE_URL:
             get_summary_client()
     except Exception as exc:  # a failed warm-up only means the first chat does that work itself
