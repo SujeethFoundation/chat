@@ -108,6 +108,12 @@ def stream_events(request=None):
             text = chunk.decode() if isinstance(chunk, bytes) else chunk
             if text.startswith("data: "):
                 events.append(json.loads(text[6:].strip()))
+        # The slot is released by a callback on this loop once the worker thread returns, which is just after the last
+        # event. asyncio.run closes the loop at once, so wait here until the thread has finished and the callback has run.
+        for _ in range(200):
+            if cb._in_flight == 0:
+                break
+            await asyncio.sleep(0.01)
         return response, events
     return asyncio.run(go())
 
@@ -303,3 +309,17 @@ def test_every_route_uses_the_fastapi_types():
     cs.register(app)
     names = sorted(f.get_function_name() for f in app.get_functions())
     assert names == ["chat", "chat_fold", "chat_health", "chat_stream"]
+
+
+def test_error_event_carries_the_cause_only_when_detail_logging_is_on(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("client broke")
+
+    monkeypatch.setattr(cs, "stream_agent", boom)
+    for flag in (False, True):
+        monkeypatch.setattr(cb, "LOG_ERROR_DETAIL", flag)
+        events = []
+        cs.work("rid", [{"role": "user", "content": "hi"}], "", events.append, __import__("threading").Event(), 0.0)
+        error = next(e for e in events if e and e["type"] == "error")
+        assert ("detail" in error) is flag
+        assert not flag or "RuntimeError: client broke" in error["detail"]

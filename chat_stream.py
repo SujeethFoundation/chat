@@ -189,7 +189,10 @@ def work(request_id, agent_messages, prior_summary, emit, cancel, began):
         status, key, note = cb.explain(exc)
         detail = f" | {type(exc).__name__}: {str(exc)[:300]}" if cb.LOG_ERROR_DETAIL else ""
         log.error("chat %s failed: %s%s", request_id, note, detail)
-        emit({"type": "error", "error": cb.FRIENDLY[key], "status": status})
+        # With CHAT_LOG_ERROR_DETAIL on, the error event also carries the cause, so it shows in the browser's Network tab
+        # when the app's log lines cannot be found. Turn that setting off again when done diagnosing.
+        extra = {"detail": f"{type(exc).__name__}: {str(exc)[:300]}"} if cb.LOG_ERROR_DETAIL else {}
+        emit({"type": "error", "error": cb.FRIENDLY[key], "status": status, **extra})
     finally:
         emit(None)
 
