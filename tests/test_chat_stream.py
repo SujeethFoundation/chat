@@ -274,3 +274,32 @@ def test_status_text_follows_the_tool_name():
     assert cs.status_for({"name": "get_documents"}) == "Reading a page…"
     assert cs.status_for({"name": "describe"}) == "Checking the Foundation's records…"
     assert cs.status_for({"name": "something_new"}) == cs.DEFAULT_STATUS
+
+
+def test_adapter_runs_a_plain_handler_under_fastapi_types():
+    import azure.functions as func
+    from types import SimpleNamespace
+
+    seen = {}
+
+    async def handler(req):
+        seen["method"], seen["origin"], seen["warm"], seen["body"] = req.method, req.headers.get("origin"), req.params.get("warm"), req.get_body()
+        return func.HttpResponse('{"ok": true}', status_code=201, mimetype="application/json", headers={"Vary": "Origin"})
+
+    async def body():
+        return b"hello"
+
+    req = SimpleNamespace(method="POST", url="https://x/api/chat?warm=1", headers={"origin": "https://www.sujeeth.org"},
+                          query_params={"warm": "1"}, body=body)
+    out = asyncio.run(cs.adapt(handler, req))
+    assert seen == {"method": "POST", "origin": "https://www.sujeeth.org", "warm": "1", "body": b"hello"}
+    assert out.status_code == 201 and out.body == b'{"ok": true}'
+    assert out.headers["vary"] == "Origin" and out.headers["content-type"].startswith("application/json")
+
+
+def test_every_route_uses_the_fastapi_types():
+    import azure.functions as func
+    app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+    cs.register(app)
+    names = sorted(f.get_function_name() for f in app.get_functions())
+    assert names == ["chat", "chat_fold", "chat_health", "chat_stream"]
