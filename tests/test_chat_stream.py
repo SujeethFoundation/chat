@@ -108,6 +108,12 @@ def stream_events(request=None):
             text = chunk.decode() if isinstance(chunk, bytes) else chunk
             if text.startswith("data: "):
                 events.append(json.loads(text[6:].strip()))
+        # The slot is released by a callback on this loop once the worker thread returns, which is just after the last
+        # event. asyncio.run closes the loop at once, so wait here until the thread has finished and the callback has run.
+        for _ in range(200):
+            if cb._in_flight == 0:
+                break
+            await asyncio.sleep(0.01)
         return response, events
     return asyncio.run(go())
 
@@ -166,12 +172,6 @@ def test_a_long_conversation_tells_the_page_to_fold(monkeypatch):
 def test_the_slot_is_free_again_after_a_stream(monkeypatch):
     use(monkeypatch, FakeClient([completed("Ok.")]))
     stream_events()
-    # The slot is released by a callback just after the last event, so give it a moment instead of checking at once.
-    import time
-    for _ in range(100):
-        if cb._in_flight == 0:
-            break
-        time.sleep(0.01)
     assert cb._in_flight == 0
 
 
