@@ -4,9 +4,10 @@ The page cannot call the Foundry agent itself: the agent endpoint accepts only M
 tokens must never be put in a web page. This route takes the conversation from the page, calls the agent
 as the app's managed identity, and returns the reply.
 
-  POST /api/chat          {"messages": [{"role": "user" | "assistant", "content": "...", "attachments": [...]}]}  ->  {"reply": "..."}
+  POST /api/chat          {"messages": [{"role": "user" | "assistant", "content": "...", "attachments": [...]}], "page": "..."}  ->  {"reply": "..."}
+                          ("page" is optional: the address of the page the chat was opened on. See enrich.py.)
   POST /api/chat/fold     {"messages": [older turns], "summary": "..."}  ->  {"summary": "..."}   (see below)
-  GET  /api/chat/health   ->  {"configured": true}; with ?warm=1 it also starts loading the model client in the background
+  GET  /api/chat/health   ->  {"configured": true, "ontology": {"version", "copied_at"}}; with ?warm=1 it also starts loading the model client in the background
 
 Visitors can attach files (PDF, Word, PowerPoint, Excel, text, Markdown, CSV) to a message. The page sends each as
 base64; chat_attachments.py reads the text out of it and adds that text to the visitor's message before the agent
@@ -73,6 +74,8 @@ from concurrent.futures import ThreadPoolExecutor
 import azure.functions as func
 
 import chat_attachments as attachments
+import enrich
+import ontology_copy
 
 bp = func.Blueprint()
 log = logging.getLogger("sujeeth-chat")
@@ -284,6 +287,20 @@ def build_agent_messages(messages):
         built.append({"role": message["role"], "content": "\n\n".join(parts + blocks)})
     built.reverse()
     return built
+
+
+def add_ontology_context(messages, agent_messages, page=None):
+    """Add what the ontology says about the visitor's newest question under that question (see enrich.py).
+    messages are the parsed turns, without attachment text. Never fails a chat: on any problem the question goes as typed."""
+    try:
+        block = enrich.context_block(messages, page, ALLOWED_ORIGINS)
+    except Exception as exc:
+        log.warning("chat enrichment skipped (%s)", type(exc).__name__)
+        return False
+    if not block or not agent_messages or agent_messages[-1]["role"] != "user":
+        return False
+    agent_messages[-1]["content"] += "\n\n" + block
+    return True
 
 
 _client = None
@@ -635,7 +652,7 @@ async def chat_health(req: func.HttpRequest) -> func.HttpResponse:
     if BASE_URL and req.params.get("warm") and _warm_state == "cold":
         threading.Thread(target=warm, name="chat-warm", daemon=True).start()
     return reply_json(200, {"configured": bool(BASE_URL), "in_flight": _in_flight, "max_concurrent": MAX_CONCURRENT,
-                            "warm": _warm_state == "done"},
+                            "warm": _warm_state == "done", "ontology": ontology_copy.status()},
                       req.headers.get("origin"))
 
 
@@ -668,6 +685,7 @@ async def chat(req: func.HttpRequest) -> func.HttpResponse:
     agent_messages, file_error = await read_files(request_id, messages)
     if file_error:
         return reply_json(400, {"error": file_error}, origin)
+    add_ontology_context(messages, agent_messages, payload.get("page"))
 
     try:
         (text, keep), waited = await run_in_slot(answer, agent_messages, prior_summary, timeout=TIMEOUT_SECONDS + 5)

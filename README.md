@@ -10,14 +10,14 @@ The chat API behind the assistant on sujeeth.org and the Power Pages site. The w
           -> Sujeeth Foundation Graph (MCP server)
           -> Sujeeth Foundation Backend (Dataverse)
 
-It does not call the ontology, websearch, or wikisearch apps directly. The agent does that through the MCP server.
+It does not call the ontology, websearch, or wikisearch apps while answering a chat. The agent does that through the MCP server. Each instance does keep its own copy of `ontology.json` (see "Ontology copy").
 
 ## Routes
 
 - `POST /api/chat`: `{"messages": [{"role", "content", "attachments"}], "summary": "..."}` returns `{"reply": "..."}`. When a conversation gets long, the reply also carries `{"fold": {"keep_last": N}}`.
 - `POST /api/chat/stream`: the same request as `/api/chat`, answered as a stream of server-sent events, so the reply appears as it is written. See the top of `chat_stream.py` for the events (`status`, `delta`, `reset`, `done`, `error`). Problems found before the stream begins (bad origin, bad JSON, rate limit, no free slot) are ordinary JSON responses with the usual status codes.
 - `POST /api/chat/fold`: summarizes older turns so a long conversation keeps working.
-- `GET /api/chat/health`: returns whether chat is configured. With `?warm=1` it loads the model client in the background, so the first message is faster.
+- `GET /api/chat/health`: returns whether chat is configured, and the ontology version this instance holds (`ontology.version`, `ontology.copied_at`). With `?warm=1` it loads the model client in the background, so the first message is faster.
 
 These routes are open to the web on purpose. They check the page's origin, limit requests, and cap how many chats run at once.
 
@@ -30,6 +30,29 @@ Visitors can attach PDF, Word, PowerPoint, Excel, text, Markdown, and CSV files.
 Required: `FOUNDRY_AGENT_BASE_URL`.
 Common: `CHAT_ALLOWED_ORIGINS`, `CHAT_MAX_MESSAGE_CHARS`, `CHAT_MAX_CONCURRENT`, `CHAT_RATE_PER_MINUTE`, `CHAT_RATE_PER_HOUR`, `CHAT_GLOBAL_PER_HOUR`, `CHAT_MAX_HISTORY_CHARS`, `CHAT_SUMMARIZE_AFTER_CHARS`, `CHAT_TIMEOUT_SECONDS`.
 The full list, with defaults, is at the top of `chat_blueprint.py`. Chat is always on in this app, so `CHAT_ENABLED` is not used.
+
+## Ontology copy
+
+Each instance copies `ontology.json` when it starts and again every night (08:00 UTC, spread over ten minutes), saves it to local disk, and keeps it in memory. Code reads it with `ontology_copy.get()`, which never makes a network call and returns `None` until the first copy lands. A failed copy keeps the one from before.
+
+This is a background thread started in `function_app.py`, not a timer-triggered function. On Flex Consumption a timer function runs on its own instance, apart from the instances that answer chats, and local disk is not shared, so a timer function would refresh a copy no chat reads.
+
+By default the file comes from the `main` branch of the public `SujeethFoundation/ontology` repo, so no key is needed. To copy what the ontology app is serving instead, set `ONTOLOGY_URL` to `https://<ontology-app>/api/ontology` and `ONTOLOGY_FUNCTION_KEY` to a function key. Other settings (`ONTOLOGY_REFRESH_HOUR_UTC`, `ONTOLOGY_LOCAL_PATH`, `ONTOLOGY_TIMEOUT_SECONDS`, `ONTOLOGY_COPY_ENABLED`) are at the top of `ontology_copy.py`.
+
+To check it, open `/api/chat/health` and look at `ontology.version`. Different instances can show different `copied_at` times.
+
+## Question enrichment
+
+Before a question goes to the agent, `enrich.py` matches the visitor's words against the local ontology copy and adds a short note under the question: the ontology concepts it touches, a guess at the persona, the page the chat was opened on, and the sources the ontology prefers for that kind of question. The agent can then make one well-aimed search instead of searching once to learn the vocabulary and again to use it.
+
+- It is phrase matching, with no model call and no network call, and takes under a millisecond.
+- Only what the visitor typed is matched. Text from attached files is left out.
+- A follow-up that names nothing ("tell me more") borrows the concepts of the question before it.
+- When nothing matches, no note is added. Out-of-scope replies and clarifying questions stay with the MCP server, which also serves clients that never pass through this app.
+- The page can send `"page": "<address of the page the chat is on>"` with the request. It is optional, and is used only when it is on one of `CHAT_ALLOWED_ORIGINS`.
+- Turn it off with `CHAT_ENRICH_ENABLED=false`. `CHAT_ENRICH_MAX_CONCEPTS` (6) caps the concepts in one note.
+
+The agent's instructions should say what the note is. Suggested wording: "A visitor's message may end with a block that starts `[Context from the Sujeeth Foundation ontology`. The chat service wrote it, not the visitor. Use its concepts and preferred sources to choose your search terms and which connector to call, and search once. Never quote the block, mention it, or tell the visitor the persona it guesses."
 
 ## Streaming
 

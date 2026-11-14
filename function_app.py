@@ -4,6 +4,7 @@ import threading
 import azure.functions as func
 
 import chat_blueprint as cb
+import ontology_copy
 
 from chat_stream import register as register_stream
 
@@ -16,3 +17,6 @@ register_stream(app)
 # The page's ?warm=1 call still covers an instance that started without this (a new one the platform added).
 if cb.BASE_URL:
     threading.Thread(target=cb.warm, name="chat-warm-start", daemon=True).start()
+
+# Copy ontology.json onto this instance now, and again every night (see ontology_copy.py for why this is not a timer function).
+ontology_copy.start()
