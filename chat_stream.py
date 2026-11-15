@@ -228,6 +228,7 @@ async def handle(req):
     agent_messages, file_error = await cb.read_files(request_id, messages)
     if file_error:
         return json_reply(400, {"error": file_error}, origin)
+    cb.add_ontology_context(messages, agent_messages, payload.get("page"))
 
     # Wait for a free slot rather than turning the visitor away. While waiting, the request counts as in flight,
     # which is what makes the platform start another instance.
