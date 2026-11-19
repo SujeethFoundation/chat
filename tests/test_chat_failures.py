@@ -25,10 +25,12 @@ class FakeClient:
     def __init__(self, *responses):
         self.queue = list(responses)
         self.calls = 0
+        self.inputs = []
         self.responses = SimpleNamespace(create=self._create)
 
     def _create(self, input=None):
         self.calls += 1
+        self.inputs.append(input)
         item = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
         if isinstance(item, Exception):
             raise item
@@ -59,6 +61,12 @@ def post_chat():
 def test_a_completed_run_returns_its_text(monkeypatch):
     use(monkeypatch, FakeClient(run_response(text="  Week 3 covers resumes.  ")))
     assert cb.ask_agent([{"role": "user", "content": "x"}]) == "Week 3 covers resumes."
+
+
+def test_each_agent_run_starts_with_the_response_guardrails(monkeypatch):
+    client = use(monkeypatch, FakeClient(run_response()))
+    cb.ask_agent([{"role": "user", "content": "x"}])
+    assert client.inputs[0][0] == {"role": "developer", "content": cb.RESPONSE_GUARDRAILS}
 
 
 def test_a_failed_run_raises_with_the_service_error_code(monkeypatch):

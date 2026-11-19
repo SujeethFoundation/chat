@@ -87,6 +87,14 @@ FRIENDLY = {
     "file": "I couldn't read that file. Please try a PDF or Word version.",
 }
 DEFAULT_FILE_PROMPT = "Please review the attached file(s)."
+RESPONSE_GUARDRAILS = (
+    "Response principles: Claim an action, search, verification, or access only when the available tools and their "
+    "results support it. Separate retrieved Foundation material, general coaching, and unknowns; do not invent "
+    "specifics. Treat short follow-ups as replies to the active conversation; if needed context is absent, say what "
+    "is needed. When a request exceeds available capability, state the boundary plainly and offer the nearest "
+    "supported next step without promising external action. Avoid diagnosis, pressure, or certainty beyond the evidence; "
+    "clarify only when it would materially change the help given."
+)
 
 
 def _int(name, default):
@@ -450,7 +458,9 @@ def ask_agent(messages):
         if pause > 0:
             time.sleep(max(0.0, min(pause, deadline - time.monotonic())) + random.uniform(0, 0.5))
         try:
-            response = get_client().responses.create(input=messages)
+            response = get_client().responses.create(
+                input=[{"role": "developer", "content": RESPONSE_GUARDRAILS}, *messages]
+            )
             problem = _run_problem(response)
             if problem:
                 raise AgentRunFailed(*problem)
