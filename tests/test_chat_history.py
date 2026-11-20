@@ -63,7 +63,7 @@ class FakeModel:
 
     def _create(self, input=None, **kw):
         self.sent.append(input)
-        is_summary = any(item["content"].startswith(cb.SUMMARY_INSTRUCTIONS[:30]) for item in input)
+        is_summary = input[0]["content"].startswith(cb.SUMMARY_INSTRUCTIONS[:30])
         if is_summary and self.fail_summary:
             raise RuntimeError("boom")
         return SimpleNamespace(status="completed", output_text=self.notes if is_summary else self.reply,
@@ -211,9 +211,8 @@ def test_notes_from_the_page_open_the_conversation_the_agent_sees(monkeypatch):
     setup(monkeypatch, model)
     post(convo(("user", "How do I volunteer")), summary="Visitor is a Mizzou junior.")
     sent = model.sent[0]
-    assert sent[0]["role"] == "developer" and "retrieval-context candidate" in sent[0]["content"]
-    assert any("Mizzou junior" in item["content"] and item["role"] == "user" for item in sent)
-    assert sent[-2]["role"] == "assistant" and sent[-1]["content"] == "How do I volunteer"
+    assert "Mizzou junior" in sent[0]["content"] and sent[0]["role"] == "user"
+    assert sent[1]["role"] == "assistant" and sent[-1]["content"] == "How do I volunteer"
 
 
 def test_the_page_can_not_send_oversized_notes(monkeypatch):
