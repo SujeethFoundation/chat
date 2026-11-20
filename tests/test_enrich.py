@@ -20,6 +20,8 @@ ONTOLOGY = {
         {"id": "book", "name": "Book", "aliases": ["books"]},
         {"id": "book_request", "name": "Book Request", "aliases": ["free book", "book order", "request a book"]},
         {"id": "program_statistics", "name": "Program Statistics", "aliases": ["how many students"]},
+        {"id": "networking", "name": "Networking", "aliases": ["networking"]},
+        {"id": "nervous", "name": "Nervous", "aliases": ["nervous"], "mood_meter": {"quadrant": "red"}},
     ],
     "personas": [
         {"id": "student", "signals": {"language": ["my resume", "my circle"]}},
@@ -81,6 +83,30 @@ def test_nothing_matched_means_no_note():
 def test_follow_up_borrows_the_question_before():
     found = run("how do I negotiate salary?", "Here is how.", "tell me more")
     assert ids(found) == ["salary_negotiation"] and found["carried"]
+
+
+def test_previous_turn_feeling_becomes_a_bounded_retrieval_context_candidate():
+    found = run("I'm nervous about networking.", "I hear you.", "What are the best practices for networking?")
+    assert found["retrieval_context"] == {
+        "feeling": "nervous", "career_context": "networking", "source": "previous_turn",
+    }
+
+
+def test_context_block_keeps_retrieval_context_structured(monkeypatch):
+    monkeypatch.setattr(enrich.ontology_copy, "get", lambda: ONTOLOGY)
+    block = enrich.context_block(turns("I'm nervous about networking.", "I hear you.",
+                                       "What are the best practices for networking?"), None, ALLOWED)
+    assert '"feeling":"nervous"' in block and '"career_context":"networking"' in block
+
+
+def test_summary_context_only_applies_when_the_career_topic_still_matches():
+    summary = "Student wants help. Active retrieval context: feeling=nervous; career_context=networking."
+    found = enrich.enrich(turns("What are the best practices for networking?"), ontology=ONTOLOGY, summary=summary)
+    assert found["retrieval_context"] == {
+        "feeling": "nervous", "career_context": "networking", "source": "summary",
+    }
+    assert enrich.enrich(turns("How do I negotiate salary?"), ontology=ONTOLOGY,
+                         summary=summary)["retrieval_context"] is None
 
 
 def test_persona_needs_a_clear_lead():
