@@ -16,6 +16,7 @@ Settings (application settings of the Function App):
   CHAT_ENRICH_ENABLED       (true) Set to false to send questions to the agent without the note.
   CHAT_ENRICH_MAX_CONCEPTS  (6) The most concepts named in one note.
 """
+import json
 import os
 import re
 from urllib.parse import urlsplit
@@ -77,7 +78,8 @@ def build_index(ontology):
     for c in classes:
         names = _phrases([c.get("name"), c["id"].replace("_", " ")])
         others = _phrases((c.get("aliases") or []) + (c.get("query_phrases") or []))
-        concepts.append({"id": c["id"], "name": c.get("name") or c["id"], "names": names, "others": others})
+        concepts.append({"id": c["id"], "name": c.get("name") or c["id"], "names": names, "others": others,
+                         "is_feeling": isinstance(c.get("mood_meter"), dict)})
     # Head words: "resume" is not an alias of Resume Resource, but it runs through that concept's phrases. A word found
     # in at least HEAD_WORD_MIN_PHRASES phrases of one concept, which hold most of its uses across the whole ontology,
     # is a weak match for that concept.
@@ -109,7 +111,8 @@ def build_index(ontology):
         if isinstance(item, dict) and item.get("prefer"):
             sources.append({"concepts": set(item.get("concepts") or []), "question_type": item.get("question_type") or "",
                             "prefer": [s for s in item["prefer"] if isinstance(s, str)]})
-    return {"concepts": concepts, "ids": {c["id"]: c["name"] for c in concepts}, "personas": personas,
+    return {"concepts": concepts, "ids": {c["id"]: c["name"] for c in concepts},
+            "feelings": {c["id"] for c in concepts if c["is_feeling"]}, "personas": personas,
             "ambiguous": ambiguous, "sources": sources}
 
 
@@ -160,7 +163,7 @@ def clean_page(page, allowed_origins):
     return (origin + path)[:MAX_PAGE_CHARS]
 
 
-def enrich(messages, page=None, allowed_origins=(), ontology=None):
+def enrich(messages, page=None, allowed_origins=(), ontology=None, summary=None):
     """What the ontology says about the visitor's newest question, or None when it says nothing.
     messages are the parsed turns ({"role", "content"}), newest last. Returns
     {"concepts": [(id, name)], "carried": bool, "persona": id or None, "sources": [(question type, preferred sources)], "page": str or None}."""
@@ -198,15 +201,31 @@ def enrich(messages, page=None, allowed_origins=(), ontology=None):
     chosen = set(ranked)
     by_overlap = sorted(index["sources"], key=lambda s: -len(s["concepts"] & chosen))
     sources = [(s["question_type"], "; ".join(s["prefer"])) for s in by_overlap if s["concepts"] & chosen][:MAX_SOURCES]
+    retrieval_context = None
+    if len(typed) > 1:
+        previous_scores = match_concepts(index, typed[-2])
+        previous_feelings = [cid for cid in previous_scores if cid in index["feelings"]]
+        current_career = [cid for cid in ranked if cid not in index["feelings"]]
+        # Only the immediately preceding visitor turn can carry a feeling into a new, active career topic.
+        # The MCP receives this as a candidate and makes the relevance decision.
+        if previous_feelings and current_career:
+            retrieval_context = {"feeling": previous_feelings[0], "career_context": current_career[0],
+                                 "source": "previous_turn"}
+    if retrieval_context is None and isinstance(summary, str):
+        match = re.search(r"active retrieval context:\s*feeling=([a-z0-9_]+);\s*career_context=([a-z0-9_]+)\.",
+                          summary.casefold())
+        if match and match.group(1) in index["feelings"] and match.group(2) in index["ids"]:
+            if match.group(2) in [cid for cid in ranked if cid not in index["feelings"]]:
+                retrieval_context = {"feeling": match.group(1), "career_context": match.group(2), "source": "summary"}
     return {"concepts": [(cid, index["ids"][cid]) for cid in ranked], "carried": carried, "persona": persona,
-            "sources": sources, "page": page}
+            "sources": sources, "page": page, "retrieval_context": retrieval_context}
 
 
-def context_block(messages, page=None, allowed_origins=()):
+def context_block(messages, page=None, allowed_origins=(), summary=None):
     """The note added under the visitor's newest message, or None when there is nothing to say or enrichment is off."""
     if not ENABLED:
         return None
-    found = enrich(messages, page, allowed_origins)
+    found = enrich(messages, page, allowed_origins, summary=summary)
     if not found:
         return None
     lines = [OPEN]
@@ -217,6 +236,10 @@ def context_block(messages, page=None, allowed_origins=()):
         lines.append(f"Possible persona, guessed from wording: {found['persona']}. Never ask the visitor who they are or tell them this guess.")
     if found["page"]:
         lines.append(f"Chat opened on: {found['page']}")
+    if found["retrieval_context"]:
+        lines.append("Retrieval-context candidate for the MCP: " +
+                     json.dumps(found["retrieval_context"], separators=(",", ":")) +
+                     ". Pass it only as structured retrieval_context; the MCP decides whether it remains relevant.")
     for question_type, prefer in found["sources"]:  # the agent judges whether the question is of this type
         lines.append(f"If the question is about \"{question_type}\", prefer: {prefer}")
     lines.append(CLOSE)

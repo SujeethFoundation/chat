@@ -63,7 +63,7 @@ class FakeModel:
 
     def _create(self, input=None, **kw):
         self.sent.append(input)
-        is_summary = input[0]["content"].startswith(cb.SUMMARY_INSTRUCTIONS[:30])
+        is_summary = any(item["content"].startswith(cb.SUMMARY_INSTRUCTIONS[:30]) for item in input)
         if is_summary and self.fail_summary:
             raise RuntimeError("boom")
         return SimpleNamespace(status="completed", output_text=self.notes if is_summary else self.reply,
@@ -171,6 +171,19 @@ def test_plan_fold_returns_none_for_a_short_chat():
     assert cb.plan_fold("", convo(("user", "hi")), "hello") is None
 
 
+def test_foundry_receives_a_compact_working_window_but_keeps_the_latest_message_whole(monkeypatch):
+    monkeypatch.setattr(cb, "FOUNDRY_MAX_MESSAGES", 4)
+    monkeypatch.setattr(cb, "FOUNDRY_MAX_CHARS", 1000)
+    monkeypatch.setattr(cb, "FOUNDRY_OLD_MESSAGE_CHARS", 200)
+    agent = convo(("user", "old question " + "a" * 600), ("assistant", "old answer " + "b" * 600),
+                  ("user", "recent question " + "c" * 600), ("assistant", "recent answer " + "d" * 600),
+                  ("user", "latest " + "e" * 700))
+    compact = cb.compact_for_foundry(agent)
+    assert compact[-1]["content"] == agent[-1]["content"]
+    assert sum(len(item["content"]) for item in compact) <= 1000
+    assert compact[0]["role"] == "user"
+
+
 def test_health_warm_starts_loading_once_and_answers_at_once(monkeypatch):
     started = []
     monkeypatch.setattr(cb, "BASE_URL", "https://agent.example.test")
@@ -198,8 +211,9 @@ def test_notes_from_the_page_open_the_conversation_the_agent_sees(monkeypatch):
     setup(monkeypatch, model)
     post(convo(("user", "How do I volunteer")), summary="Visitor is a Mizzou junior.")
     sent = model.sent[0]
-    assert "Mizzou junior" in sent[0]["content"] and sent[0]["role"] == "user"
-    assert sent[1]["role"] == "assistant" and sent[-1]["content"] == "How do I volunteer"
+    assert sent[0]["role"] == "developer" and "retrieval-context candidate" in sent[0]["content"]
+    assert any("Mizzou junior" in item["content"] and item["role"] == "user" for item in sent)
+    assert sent[-2]["role"] == "assistant" and sent[-1]["content"] == "How do I volunteer"
 
 
 def test_the_page_can_not_send_oversized_notes(monkeypatch):

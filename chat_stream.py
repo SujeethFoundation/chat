@@ -153,7 +153,7 @@ def stream_agent(messages, emit, cancel):
             time.sleep(max(0.0, min(pause, rate_deadline - time.monotonic())) + random.uniform(0, 0.5))
         run = Run(emit)
         try:
-            stream = cb.get_client().responses.create(input=messages, stream=True)
+            stream = cb.get_client().responses.create(input=cb.agent_input(messages), stream=True)
             return consume(stream, run, cancel, deadline), run
         except Exception as exc:
             if (run.sent_text or cancel.is_set() or isinstance(exc, Cancelled)
@@ -172,7 +172,7 @@ def stream_agent(messages, emit, cancel):
 def work(request_id, agent_messages, prior_summary, emit, cancel, began):
     """Runs on a chat-pool thread, in the chat's slot. Always ends by emitting None."""
     try:
-        text, run = stream_agent(cb.summary_messages(prior_summary) + agent_messages, emit, cancel)
+        text, run = stream_agent(cb.foundry_messages(prior_summary, agent_messages), emit, cancel)
         keep = cb.plan_fold(prior_summary, agent_messages, text) if text else None
         if not text:
             log.error("chat %s failed: agent returned no text", request_id)
@@ -228,7 +228,7 @@ async def handle(req):
     agent_messages, file_error = await cb.read_files(request_id, messages)
     if file_error:
         return json_reply(400, {"error": file_error}, origin)
-    cb.add_ontology_context(messages, agent_messages, payload.get("page"))
+    cb.add_ontology_context(messages, agent_messages, payload.get("page"), prior_summary)
 
     # Wait for a free slot rather than turning the visitor away. While waiting, the request counts as in flight,
     # which is what makes the platform start another instance.
