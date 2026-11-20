@@ -309,18 +309,6 @@ def add_ontology_context(messages, agent_messages, page=None, summary=None):
     return True
 
 
-RETRIEVAL_CONTEXT_INSTRUCTIONS = (
-    "A private ontology context block may include a retrieval-context candidate. When searching, pass its exact "
-    "structured value as search_sujeeth_foundation.retrieval_context. The MCP decides whether it is still relevant. "
-    "Never mention the private block or its fields to the visitor."
-)
-
-
-def agent_input(messages):
-    """One concise private instruction for both regular and streaming Foundry requests."""
-    return [{"role": "developer", "content": RETRIEVAL_CONTEXT_INSTRUCTIONS}, *messages]
-
-
 _client = None
 _token_provider = None
 _client_lock = threading.Lock()
@@ -468,7 +456,7 @@ def ask_agent(messages):
         if pause > 0:
             time.sleep(max(0.0, min(pause, deadline - time.monotonic())) + random.uniform(0, 0.5))
         try:
-            response = get_client().responses.create(input=agent_input(messages))
+            response = get_client().responses.create(input=messages)
             problem = _run_problem(response)
             if problem:
                 raise AgentRunFailed(*problem)

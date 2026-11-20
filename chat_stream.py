@@ -153,7 +153,7 @@ def stream_agent(messages, emit, cancel):
             time.sleep(max(0.0, min(pause, rate_deadline - time.monotonic())) + random.uniform(0, 0.5))
         run = Run(emit)
         try:
-            stream = cb.get_client().responses.create(input=cb.agent_input(messages), stream=True)
+            stream = cb.get_client().responses.create(input=messages, stream=True)
             return consume(stream, run, cancel, deadline), run
         except Exception as exc:
             if (run.sent_text or cancel.is_set() or isinstance(exc, Cancelled)
