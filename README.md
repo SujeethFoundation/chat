@@ -87,3 +87,7 @@ The log line `chat <id> stream ok` reports `first_text` (seconds until the first
     python -m pytest -q
 
 `tests/load_test.py` runs a load test against the chat route. It spends real model tokens, so start small.
+
+## Platform architecture
+
+This repo is one of nine in the SujeethFoundation org. The architecture docs live in the website repo's `architecture/` folder: [platform architecture](https://github.com/SujeethFoundation/sujeethfoundation.github.io/blob/main/architecture/platform-architecture.md), [data model and portal](https://github.com/SujeethFoundation/sujeethfoundation.github.io/blob/main/architecture/platform-data-model-and-portal.md) and [business architecture](https://github.com/SujeethFoundation/sujeethfoundation.github.io/blob/main/architecture/business-architecture.md). This repo is the chat agent API behind the site widget. See "Chat agent" in the platform architecture doc. Each repo's README is listed in the platform architecture doc under "Repo READMEs".
