@@ -57,7 +57,7 @@ Each instance copies `ontology.json` when it starts and again every night (08:00
 
 This is a background thread started in `function_app.py`, not a timer-triggered function. On Flex Consumption a timer function runs on its own instance, apart from the instances that answer chats, and local disk is not shared, so a timer function would refresh a copy no chat reads.
 
-By default the file comes from the `main` branch of the public `SujeethFoundation/ontology` repo, so no key is needed. To copy what the ontology app is serving instead, set `ONTOLOGY_URL` to `https://<ontology-app>/api/ontology` and `ONTOLOGY_FUNCTION_KEY` to a function key. Other settings (`ONTOLOGY_REFRESH_HOUR_UTC`, `ONTOLOGY_LOCAL_PATH`, `ONTOLOGY_TIMEOUT_SECONDS`, `ONTOLOGY_COPY_ENABLED`) are at the top of `ontology_copy.py`.
+By default the file comes from the `main` branch of the public `SujeethFoundation/ontology` repo, so no key is needed. To copy the ontology app's slim catalog (about 255 KB instead of 850 KB, with the same edges the other services see) set `ONTOLOGY_URL` to `https://<ontology-app>` (or `https://<ontology-app>/api/ontology`) and `ONTOLOGY_FUNCTION_KEY` to a function key. If the app does not answer, the copy falls back to the GitHub file. Other settings (`ONTOLOGY_REFRESH_HOUR_UTC`, `ONTOLOGY_LOCAL_PATH`, `ONTOLOGY_TIMEOUT_SECONDS`, `ONTOLOGY_COPY_ENABLED`) are at the top of `ontology_copy.py`.
 
 To check it, open `/api/chat/health` and look at `ontology.version`. Different instances can show different `copied_at` times.
 

@@ -111,3 +111,37 @@ def test_start_runs_once_and_respects_the_off_switch(monkeypatch):
     monkeypatch.setattr(oc, "_started", False)
     monkeypatch.setattr(oc, "ENABLED", False)
     assert oc.start() is False and started == ["ontology-copy"]
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("", oc.DEFAULT_URL),
+    ("https://app.example", "https://app.example/api/ontology/catalog"),
+    ("https://app.example/", "https://app.example/api/ontology/catalog"),
+    ("https://app.example/api/ontology", "https://app.example/api/ontology/catalog"),
+    ("https://app.example/api/ontology/catalog", "https://app.example/api/ontology/catalog"),
+    ("https://elsewhere.example/ontology.json", "https://elsewhere.example/ontology.json"),
+])
+def test_an_ontology_app_address_means_its_slim_catalog(value, expected):
+    assert oc.catalog_url(value) == expected
+
+
+def test_the_github_file_is_the_fallback_when_the_app_does_not_answer(monkeypatch):
+    monkeypatch.setattr(oc, "URL", "https://app.example/api/ontology/catalog")
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        if url != oc.DEFAULT_URL:
+            raise OSError("app down")
+        return GOOD
+
+    monkeypatch.setattr(oc, "_fetch", fetch)
+    assert oc._download() == GOOD
+    assert asked == ["https://app.example/api/ontology/catalog", oc.DEFAULT_URL]
+
+
+def test_no_fallback_when_github_is_already_the_source(monkeypatch):
+    monkeypatch.setattr(oc, "URL", oc.DEFAULT_URL)
+    monkeypatch.setattr(oc, "_fetch", lambda url: (_ for _ in ()).throw(OSError("down")))
+    with pytest.raises(OSError):
+        oc._download()
