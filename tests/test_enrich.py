@@ -9,10 +9,10 @@ ALLOWED = {"https://www.sujeeth.org"}
 ONTOLOGY = {
     "ontology_version": "test",
     "classes": [
-        {"id": "resume_resource", "name": "Resume Resource",
+        {"id": "resume_resource", "category": "skill", "name": "Resume Resource",
          "aliases": ["resume writing", "resume tips", "resume review", "cover letter"]},
-        {"id": "interviewing", "name": "Interviewing", "aliases": ["job interview", "mock interview"]},
-        {"id": "salary_negotiation", "name": "Salary Negotiation", "aliases": ["negotiate salary", "counteroffer"]},
+        {"id": "interviewing", "category": "skill", "name": "Interviewing", "aliases": ["job interview", "mock interview"]},
+        {"id": "salary_negotiation", "category": "skill", "name": "Salary Negotiation", "aliases": ["negotiate salary", "counteroffer"]},
         {"id": "career_development", "name": "Career Development", "aliases": ["job", "careers"]},
         {"id": "donation", "name": "Donation", "aliases": ["donate", "support the Foundation"]},
         {"id": "volunteer", "name": "Volunteer", "aliases": ["volunteering"]},
@@ -20,7 +20,9 @@ ONTOLOGY = {
         {"id": "book", "name": "Book", "aliases": ["books"]},
         {"id": "book_request", "name": "Book Request", "aliases": ["free book", "book order", "request a book"]},
         {"id": "program_statistics", "name": "Program Statistics", "aliases": ["how many students"]},
-        {"id": "networking", "name": "Networking", "aliases": ["networking"]},
+        {"id": "networking", "category": "skill", "name": "Networking", "aliases": ["networking"]},
+        {"id": "permission_to_feel", "category": "framework", "name": "Permission to Feel",
+         "aliases": ["emotions as information"]},
         {"id": "nervous", "name": "Nervous", "aliases": ["nervous"], "mood_meter": {"quadrant": "red"}},
     ],
     "personas": [
@@ -107,6 +109,44 @@ def test_summary_context_only_applies_when_the_career_topic_still_matches():
     }
     assert enrich.enrich(turns("How do I negotiate salary?"), ontology=ONTOLOGY,
                          summary=summary)["retrieval_context"] is None
+
+
+def test_feeling_only_follow_up_takes_the_topic_of_the_assistants_last_reply():
+    found = run("How do I stop feeling nervous?", "Notice the feeling first. For networking, prepare one question.",
+                "Why would someone want to talk to me?")
+    assert ids(found) == ["nervous"] and found["carried"]
+    assert found["reply_topic"] == ("networking", "Networking")
+    assert found["retrieval_context"] == {
+        "feeling": "nervous", "career_context": "networking", "source": "assistant_reply",
+    }
+
+
+def test_reply_topic_comes_from_skills_not_frameworks():
+    found = run("How do I stop feeling nervous?",
+                "The Permission to Feel guide treats emotions as information. For networking, prepare one question.",
+                "Why would someone want to talk to me?")
+    assert found["reply_topic"] == ("networking", "Networking")
+
+
+def test_reply_topic_needs_one_clear_topic():
+    found = run("How do I stop feeling nervous?", "Practice a mock interview, then polish your resume tips.",
+                "Why would someone want to talk to me?")
+    assert found["reply_topic"] is None and found["retrieval_context"] is None
+
+
+def test_reply_topic_is_not_used_when_the_visitor_named_a_career_topic():
+    found = run("Hi", "Happy to help with resume tips or a mock interview.", "Networking makes me nervous.")
+    assert found["reply_topic"] is None
+    assert found["retrieval_context"] is None
+
+
+def test_context_block_names_the_reply_topic_apart_from_the_visitors_concepts(monkeypatch):
+    monkeypatch.setattr(enrich.ontology_copy, "get", lambda: ONTOLOGY)
+    block = enrich.context_block(turns("How do I stop feeling nervous?", "For networking, prepare one question.",
+                                       "Why would someone want to talk to me?"), None, ALLOWED)
+    assert "Concepts carried over from the question before: nervous (Nervous)" in block
+    assert "Topic of your last reply: networking (Networking)." in block
+    assert '"career_context":"networking"' in block and '"source":"assistant_reply"' in block
 
 
 def test_persona_needs_a_clear_lead():

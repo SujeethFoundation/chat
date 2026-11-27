@@ -10,7 +10,9 @@ the MCP server, which also serves clients that never pass through this app. When
 and the agent works as it did before.
 
 Only the words the visitor typed are matched. Text read from attached files is left out, because a resume mentions
-half the ontology.
+half the ontology. One narrow exception: when the visitor's words (or the question before) name only a feeling, such as
+"Why would someone want to talk to me?" after an answer about anxiety, the career topic the assistant's last reply
+was about is added as a separate line, because a feeling alone gives the MCP server nothing to anchor a search on.
 
 Settings (application settings of the Function App):
   CHAT_ENRICH_ENABLED       (true) Set to false to send questions to the agent without the note.
@@ -79,7 +81,7 @@ def build_index(ontology):
         names = _phrases([c.get("name"), c["id"].replace("_", " ")])
         others = _phrases((c.get("aliases") or []) + (c.get("query_phrases") or []))
         concepts.append({"id": c["id"], "name": c.get("name") or c["id"], "names": names, "others": others,
-                         "is_feeling": isinstance(c.get("mood_meter"), dict)})
+                         "category": c.get("category"), "is_feeling": isinstance(c.get("mood_meter"), dict)})
     # Head words: "resume" is not an alias of Resume Resource, but it runs through that concept's phrases. A word found
     # in at least HEAD_WORD_MIN_PHRASES phrases of one concept, which hold most of its uses across the whole ontology,
     # is a weak match for that concept.
@@ -112,6 +114,7 @@ def build_index(ontology):
             sources.append({"concepts": set(item.get("concepts") or []), "question_type": item.get("question_type") or "",
                             "prefer": [s for s in item["prefer"] if isinstance(s, str)]})
     return {"concepts": concepts, "ids": {c["id"]: c["name"] for c in concepts},
+            "skills": {c["id"] for c in concepts if c["category"] == "skill"},
             "feelings": {c["id"] for c in concepts if c["is_feeling"]}, "personas": personas,
             "ambiguous": ambiguous, "sources": sources}
 
@@ -148,6 +151,21 @@ def guess_persona(index, padded):
     return counts[0][1]
 
 
+def reply_topic(index, messages):
+    """The one career skill (networking, interviewing, ...) the assistant's last reply is about, or None. Only skills
+    count: a reply about anxiety names the Permission to Feel guide, which is a framework and no help as a search anchor.
+    A reply that names several skills equally (a syllabus) gives no single topic, and a tie is not a guess."""
+    last = next((m.get("content") for m in reversed(messages) if m.get("role") == "assistant"), None)
+    if not isinstance(last, str):
+        return None
+    scores = {cid: score for cid, score in match_concepts(index, normalize(last)).items() if cid in index["skills"]}
+    if not scores:
+        return None
+    top = max(scores.values())
+    leaders = [cid for cid, score in scores.items() if score == top]
+    return leaders[0] if len(leaders) == 1 else None
+
+
 def clean_page(page, allowed_origins):
     """The page the visitor opened the chat on, without its query string, or None unless it is on an allowed site."""
     if not isinstance(page, str) or len(page) > 2000:
@@ -166,7 +184,8 @@ def clean_page(page, allowed_origins):
 def enrich(messages, page=None, allowed_origins=(), ontology=None, summary=None):
     """What the ontology says about the visitor's newest question, or None when it says nothing.
     messages are the parsed turns ({"role", "content"}), newest last. Returns
-    {"concepts": [(id, name)], "carried": bool, "persona": id or None, "sources": [(question type, preferred sources)], "page": str or None}."""
+    {"concepts": [(id, name)], "carried": bool, "persona": id or None, "sources": [(question type, preferred sources)],
+    "page": str or None, "retrieval_context": dict or None, "reply_topic": (id, name) or None}."""
     ontology = ontology if ontology is not None else ontology_copy.get()
     if not ontology:
         return None
@@ -202,15 +221,21 @@ def enrich(messages, page=None, allowed_origins=(), ontology=None, summary=None)
     by_overlap = sorted(index["sources"], key=lambda s: -len(s["concepts"] & chosen))
     sources = [(s["question_type"], "; ".join(s["prefer"])) for s in by_overlap if s["concepts"] & chosen][:MAX_SOURCES]
     retrieval_context = None
+    current_career = [cid for cid in ranked if cid not in index["feelings"]]
+    # Only a feeling so far: take the career topic from the assistant's last reply, as its own line in the note.
+    topic = None if current_career else reply_topic(index, messages)
     if len(typed) > 1:
         previous_scores = match_concepts(index, typed[-2])
         previous_feelings = [cid for cid in previous_scores if cid in index["feelings"]]
-        current_career = [cid for cid in ranked if cid not in index["feelings"]]
         # Only the immediately preceding visitor turn can carry a feeling into a new, active career topic.
         # The MCP receives this as a candidate and makes the relevance decision.
         if previous_feelings and current_career:
             retrieval_context = {"feeling": previous_feelings[0], "career_context": current_career[0],
                                  "source": "previous_turn"}
+        elif topic:
+            feelings = previous_feelings or [cid for cid in ranked if cid in index["feelings"]]
+            if feelings:
+                retrieval_context = {"feeling": feelings[0], "career_context": topic, "source": "assistant_reply"}
     if retrieval_context is None and isinstance(summary, str):
         match = re.search(r"active retrieval context:\s*feeling=([a-z0-9_]+);\s*career_context=([a-z0-9_]+)\.",
                           summary.casefold())
@@ -218,7 +243,8 @@ def enrich(messages, page=None, allowed_origins=(), ontology=None, summary=None)
             if match.group(2) in [cid for cid in ranked if cid not in index["feelings"]]:
                 retrieval_context = {"feeling": match.group(1), "career_context": match.group(2), "source": "summary"}
     return {"concepts": [(cid, index["ids"][cid]) for cid in ranked], "carried": carried, "persona": persona,
-            "sources": sources, "page": page, "retrieval_context": retrieval_context}
+            "sources": sources, "page": page, "retrieval_context": retrieval_context,
+            "reply_topic": (topic, index["ids"][topic]) if topic else None}
 
 
 def context_block(messages, page=None, allowed_origins=(), summary=None):
@@ -232,6 +258,9 @@ def context_block(messages, page=None, allowed_origins=(), summary=None):
     if found["concepts"]:
         label = "Concepts carried over from the question before" if found["carried"] else "Matched concepts"
         lines.append(f"{label}: " + ", ".join(f"{cid} ({name})" for cid, name in found["concepts"]))
+    if found["reply_topic"]:
+        lines.append("Topic of your last reply: {} ({}). The visitor's question may refer to it; they did not name it."
+                     .format(*found["reply_topic"]))
     if found["persona"]:
         lines.append(f"Possible persona, guessed from wording: {found['persona']}. Never ask the visitor who they are or tell them this guess.")
     if found["page"]:

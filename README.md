@@ -68,6 +68,7 @@ Before a question goes to the agent, `enrich.py` matches the visitor's words aga
 - It is phrase matching, with no model call and no network call, and takes under a millisecond.
 - Only what the visitor typed is matched. Text from attached files is left out.
 - A follow-up that names nothing ("tell me more") borrows the concepts of the question before it.
+- When the visitor's words name only a feeling ("Why would someone want to talk to me?" after an answer about anxiety), the note also names the one career topic the assistant's last reply was about, on its own line, and offers it to the MCP as a `retrieval_context` candidate with `"source":"assistant_reply"`. A reply that names several topics equally gives no topic.
 - When nothing matches, no note is added. Out-of-scope replies and clarifying questions stay with the MCP server, which also serves clients that never pass through this app.
 - The page can send `"page": "<address of the page the chat is on>"` with the request. It is optional, and is used only when it is on one of `CHAT_ALLOWED_ORIGINS`.
 - Turn it off with `CHAT_ENRICH_ENABLED=false`. `CHAT_ENRICH_MAX_CONCEPTS` (6) caps the concepts in one note.
