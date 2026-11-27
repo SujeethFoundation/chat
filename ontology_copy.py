@@ -1,4 +1,8 @@
-"""Keeps a copy of the Foundation's ontology.json on this instance, so chat code can read the ontology without a network call.
+"""Keeps a copy of the Foundation's ontology on this instance, so chat code can read the ontology without a network call.
+
+The copy is the slim catalog (about 255 KB) when the ontology app is configured, or the whole ontology.json (about
+850 KB) from GitHub when it is not. Chat reads only class names, aliases and query phrases, personas, ambiguous terms
+and source precedence, and the slim catalog carries all of them.
 
 Each instance copies the file when it starts and again once a night. The copy is saved to local disk and kept in
 memory; get() returns it.
@@ -14,7 +18,9 @@ times sooner if it has no copy at all).
 Settings (application settings of the Function App):
   ONTOLOGY_URL               Where to copy from. Default: ontology/ontology.json on the main branch of the public
                              SujeethFoundation/ontology repo. To copy what the ontology app is serving instead, set it to
-                             https://<ontology-app>/api/ontology and set ONTOLOGY_FUNCTION_KEY.
+                             https://<ontology-app> or https://<ontology-app>/api/ontology (either way the slim
+                             /api/ontology/catalog is read) and set ONTOLOGY_FUNCTION_KEY. If the app does not answer,
+                             the copy falls back to the GitHub file.
   ONTOLOGY_FUNCTION_KEY      Optional. Sent as x-functions-key. Never sent to the default GitHub address.
   ONTOLOGY_REFRESH_HOUR_UTC  (8) Hour of the nightly copy, 0-23 UTC. 8 is 2 a.m. Central in winter, 3 a.m. in summer.
   ONTOLOGY_LOCAL_PATH        Where the copy is saved. Default: ontology.json in the instance's temp folder.
@@ -34,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 log = logging.getLogger("sujeeth-chat")
 
 DEFAULT_URL = "https://raw.githubusercontent.com/SujeethFoundation/ontology/main/ontology/ontology.json"
-MAX_BYTES = 5 * 1024 * 1024  # the file is about 130 KB; anything near this size is not the ontology
+MAX_BYTES = 5 * 1024 * 1024  # the file is about 850 KB and the slim catalog about 255 KB; anything near this is not the ontology
 RETRY_SECONDS = (60, 300, 900)  # waits between tries while the instance has no copy at all
 JITTER_SECONDS = 600  # instances spread their nightly copy over ten minutes
 
@@ -46,7 +52,20 @@ def _int(name, default):
         return default
 
 
-URL = (os.getenv("ONTOLOGY_URL") or "").strip() or DEFAULT_URL
+def catalog_url(value):
+    """The address to copy from. An ontology app address (with or without /api/ontology) means its slim catalog; any
+    other address is used as it is."""
+    value = (value or "").strip().rstrip("/")
+    if not value:
+        return DEFAULT_URL
+    if value.endswith("/api/ontology"):
+        return value + "/catalog"
+    if value.endswith("/api/ontology/catalog") or value.endswith(".json"):
+        return value
+    return value + "/api/ontology/catalog"
+
+
+URL = catalog_url(os.getenv("ONTOLOGY_URL"))
 FUNCTION_KEY = (os.getenv("ONTOLOGY_FUNCTION_KEY") or "").strip()
 REFRESH_HOUR_UTC = min(23, max(0, _int("ONTOLOGY_REFRESH_HOUR_UTC", 8)))
 LOCAL_PATH = (os.getenv("ONTOLOGY_LOCAL_PATH") or "").strip() or os.path.join(tempfile.gettempdir(), "ontology.json")
@@ -60,16 +79,28 @@ _started = False
 _stop = threading.Event()
 
 
-def _download():
-    """Returns the ontology file's bytes. Raises on any network or HTTP problem."""
+def _fetch(url):
     headers = {"Accept": "application/json", "User-Agent": "sujeeth-chat"}
-    if FUNCTION_KEY and URL != DEFAULT_URL:
+    if FUNCTION_KEY and url != DEFAULT_URL:
         headers["x-functions-key"] = FUNCTION_KEY
-    with urllib.request.urlopen(urllib.request.Request(URL, headers=headers), timeout=TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=TIMEOUT_SECONDS) as response:
         body = response.read(MAX_BYTES + 1)
     if len(body) > MAX_BYTES:
         raise ValueError("ontology file is larger than expected")
+    _parse(body)  # an answer that is not an ontology counts as no answer, so the fallback gets its turn
     return body
+
+
+def _download():
+    """Returns the ontology's bytes: from URL, or from the GitHub file when URL is the ontology app and it does not
+    answer with an ontology. Raises when neither does."""
+    try:
+        return _fetch(URL)
+    except Exception as exc:
+        if URL == DEFAULT_URL:
+            raise
+        log.warning("ontology app did not answer (%s); trying the GitHub file", type(exc).__name__)
+        return _fetch(DEFAULT_URL)
 
 
 def _parse(body):
